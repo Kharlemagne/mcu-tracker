@@ -1,6 +1,5 @@
 import { useState, useEffect, useMemo, Fragment } from "react";
 import {
-  CORE,
   SLOTS,
   SHORTS,
   PHASES,
@@ -18,7 +17,6 @@ import {
   IW_PARTS,
   KONT,
   KONT_NUM,
-  ORDERED_CORE,
   STORAGE_KEY,
   TOP_TABS,
   TAB_HOME,
@@ -59,6 +57,34 @@ const listProgress = (items, state) => {
   return { done, total: items.length, pct: items.length ? Math.round((done / items.length) * 100) : 0 };
 };
 
+/* ---------------- KONTINUITY SECTIONS (for the gems and the big bar) ---------------- */
+// Every section on the Kontinuity tab, top to bottom, with every watchable row inside it
+// (films, seasons, episode blocks, one-shots, crossovers). Crossovers placed after a film are included.
+const SECTIONS = (() => {
+  const out = [];
+  const build = (key, title, color, collect) => {
+    const entries = [];
+    const seen = new Set();
+    collect(en => { if (en && !seen.has(en.id)) { seen.add(en.id); entries.push(en); } });
+    out.push({ key, title, color, entries });
+  };
+  P0.forEach(g => build(g.key, g.title, g.color, add => g.parts.forEach(part => part.ids.forEach(id => add(ENTRY[id])))));
+  KONT.forEach(sec => build(sec.key, sec.title, sec.color, add => sec.items.forEach(t => {
+    if (t.k === "core") { add(CORE_BY_ID[t.id]); (STREAM_AFTER[t.id] || []).forEach(add); }
+    else if (t.k === "part") { add(CORE_BY_ID.iw); if (t.n === 2) (STREAM_AFTER.iw || []).forEach(add); }
+    else if (t.k === "seg") add(SEGS[t.id]);
+    else if (t.k === "side" || t.k === "stream") add(ENTRY[t.id]);
+    else if (t.k === "short") add(SHORTS[t.id]);
+    else if (t.k === "def") DEF_GROUPS[t.id].ids.forEach(id => add(ENTRY[id]));
+  })));
+  return out;
+})();
+// Everything on the tab, once each, in watch order
+const ALL_ENTRIES = (() => {
+  const seen = new Set();
+  return SECTIONS.flatMap(sec => sec.entries).filter(en => (seen.has(en.id) ? false : (seen.add(en.id), true)));
+})();
+
 /* ---------------- COMPONENT ---------------- */
 export default function MCUTracker() {
   const [state, setState] = useState({ done: {}, eps: {} });
@@ -77,6 +103,8 @@ export default function MCUTracker() {
   const [expanded, setExpanded] = useState({});
   const [resetArm, setResetArm] = useState(false);
   const [backupMsg, setBackupMsg] = useState("");
+  const [pendingJump, setPendingJump] = useState(null);
+  const [flashKey, setFlashKey] = useState(null);
 
   useEffect(() => {
     (async () => {
@@ -186,33 +214,27 @@ export default function MCUTracker() {
     reader.readAsText(file);
   };
 
-  const overall = useMemo(() => listProgress(CORE, state), [state]);
-  const upNext = useMemo(() => ORDERED_CORE.find(it => !isComplete(it, state)), [state]);
-  // One gem per Kontinuity saga, counting everything watchable inside it (films, seasons, one-shots, crossovers)
-  const sagaProg = useMemo(() => KONT.map(sec => {
-    const entries = [];
-    const seen = new Set();
-    const add = (en) => { if (en && !seen.has(en.id)) { seen.add(en.id); entries.push(en); } };
-    sec.items.forEach(t => {
-      if (t.k === "core") add(CORE_BY_ID[t.id]);
-      else if (t.k === "part") add(CORE_BY_ID.iw);
-      else if (t.k === "seg") add(SEGS[t.id]);
-      else if (t.k === "side" || t.k === "stream") add(ENTRY[t.id]);
-      else if (t.k === "short") add(SHORTS[t.id]);
-      else if (t.k === "def") DEF_GROUPS[t.id].ids.forEach(id => add(ENTRY[id]));
-    });
-    return { key: sec.key, title: sec.title, color: sec.color, ...listProgress(entries, state) };
-  }), [state]);
+  const overall = useMemo(() => listProgress(ALL_ENTRIES, state), [state]);
+  const upNext = useMemo(() => ALL_ENTRIES.find(it => !isComplete(it, state)), [state]);
+  // One gem per section of the Kontinuity tab, counting every item inside it
+  const sagaProg = useMemo(() => SECTIONS.map(sec => ({ key: sec.key, title: sec.title, color: sec.color, ...listProgress(sec.entries, state) })), [state]);
+  const progByKey = useMemo(() => Object.fromEntries(sagaProg.map(g => [g.key, g])), [sagaProg]);
 
+  // Gem tap: switch to the Kontinuity tab, open the section if it is hidden, then jump to it
   const jumpToSaga = (key) => {
     setTop("kontinuity");
-    setTimeout(() => {
-      const el = document.getElementById(`kont-${key}`);
-      if (!el) return;
-      const calm = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-      el.scrollIntoView({ behavior: calm ? "auto" : "smooth", block: "start" });
-    }, 60);
+    setP0Open(x => ({ ...x, [key]: true }));
+    setPendingJump(key);
   };
+  useEffect(() => {
+    if (!pendingJump || top !== "kontinuity") return;
+    const el = document.getElementById(`kont-${pendingJump}`);
+    if (el) el.scrollIntoView({ block: "start" });
+    const key = pendingJump;
+    setFlashKey(key);
+    setPendingJump(null);
+    setTimeout(() => setFlashKey(k => (k === key ? null : k)), 1500);
+  }, [pendingJump, top, p0Open]);
 
   /* ---- row renderer ---- */
   const Row = (entry, label) => {
@@ -315,7 +337,7 @@ export default function MCUTracker() {
     const prog = listProgress(entries.flat(), state);
     const open = p0Open[g.key] !== false;
     return (
-      <section key={g.key} className="phase">
+      <section key={g.key} id={`kont-${g.key}`} className={`phase${flashKey === g.key ? " flash" : ""}`}>
         <div className="phaseHead">
           <h2 style={{ color: g.color }}>{g.title}</h2>
           <span className="phaseCount">{prog.done}/{prog.total}</span>
@@ -386,16 +408,17 @@ export default function MCUTracker() {
   };
 
   const kontSections = KONT.map(sec => {
-    const coreIds = [...new Set(sec.items.map(t => (t.k === "core" ? t.id : t.k === "part" ? "iw" : null)).filter(Boolean))];
-    const prog = listProgress(coreIds.map(id => CORE_BY_ID[id]), state);
+    const prog = progByKey[sec.key];
+    const open = p0Open[sec.key] !== false;
     return (
-      <section key={sec.key} id={`kont-${sec.key}`} className="phase">
+      <section key={sec.key} id={`kont-${sec.key}`} className={`phase${flashKey === sec.key ? " flash" : ""}`}>
         <div className="phaseHead">
           <h2 style={{ color: sec.color }}>{sec.title}</h2>
           <span className="phaseCount">{prog.done}/{prog.total}</span>
+          <button className="p0Toggle" aria-expanded={open} onClick={() => setP0Open(x => ({ ...x, [sec.key]: !open }))}>{open ? "Hide" : "Show"}</button>
         </div>
         {sec.blurb && <p className="p0Blurb">{sec.blurb}</p>}
-        {sec.items.map(renderK)}
+        {open && sec.items.map(renderK)}
       </section>
     );
   });
@@ -496,16 +519,18 @@ export default function MCUTracker() {
         }
         h1 em { font-style: normal; color: #E23636; }
         .sub { color: #8B93AD; font-size: 13px; margin-bottom: 18px; }
-        .gems { display: grid; grid-template-columns: repeat(var(--n, 6), minmax(0, 1fr)); gap: 18px 4px; justify-items: center; margin: 18px 0 6px; }
+        .gems { display: grid; grid-template-columns: repeat(10, minmax(0, 1fr)); gap: 18px 4px; justify-items: center; margin: 18px 0 6px; }
         .gemHint { font-size: 11px; color: #5B6588; margin-top: 4px; }
-        .phase { scroll-margin-top: 120px; }
+        .phase { scroll-margin-top: 120px; border-radius: 12px; }
+        .phase.flash { animation: sagaFlash 1.5s ease-out; }
+        @keyframes sagaFlash { 0% { background: rgba(240,180,41,.16); box-shadow: 0 0 0 6px rgba(240,180,41,.16); } 100% { background: transparent; box-shadow: 0 0 0 6px transparent; } }
         .gem { position: relative; width: 22px; height: 22px; border-radius: 7px; transform: rotate(45deg);
                border: 1.5px solid; overflow: hidden; background: #10152A; flex: none; }
         .gem i { position: absolute; left: 0; right: 0; bottom: 0; display: block; }
         .gemWrap { display: flex; flex-direction: column; align-items: center; gap: 9px; background: none; border: 0; padding: 4px 0 0; margin: 0; cursor: pointer; font: inherit; color: inherit; }
         .gemWrap:hover .gem { filter: brightness(1.25); }
         .gemWrap:focus-visible { outline: 2px solid #F0B429; outline-offset: 3px; border-radius: 8px; }
-        @media (max-width: 560px) { .gems { grid-template-columns: repeat(6, minmax(0, 1fr)); } }
+        @media (max-width: 560px) { .gems { grid-template-columns: repeat(7, minmax(0, 1fr)); } }
         .gemLabel { font-size: 10px; color: #8B93AD; font-variant-numeric: tabular-nums; }
         .bigBar { height: 10px; background: #131829; border: 1px solid #232B45; border-radius: 99px; overflow: hidden; margin-top: 14px; }
         .bigBar div { height: 100%; background: linear-gradient(90deg, #E23636, #F0B429); border-radius: 99px; transition: width .5s cubic-bezier(.2,.8,.2,1); }
@@ -634,14 +659,14 @@ export default function MCUTracker() {
         .importLbl { display: inline-block; cursor: pointer; }
         .backupMsg { font-size: 12px; color: #8B93AD; }
         .disclaimer { margin-top: 18px; font-size: 11px; color: #5B6588; line-height: 1.55; }
-        @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+        @media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
       `}</style>
 
       <div className="wrap">
         <header>
           <div className="kicker">Watch orders · through Oct 2026</div>
           <h1>The Ultimate <em>MCU</em> Tracker</h1>
-          <p className="sub">{CORE.length} canon entries across {KONT.length} Kontinuity sagas — check off films, tap a series to track every episode. Progress saves automatically.</p>
+          <p className="sub">{ALL_ENTRIES.length} things to watch across {SECTIONS.length} Kontinuity sections — check off films, tap a series to track every episode. Progress saves automatically.</p>
 
           <div className="betaBar">
             <span className="betaPill">BETA {APP_VERSION}</span>
@@ -649,7 +674,7 @@ export default function MCUTracker() {
             <a className="kofi" href={KOFI_URL} target="_blank" rel="noopener noreferrer">☕ Support on Ko-fi</a>
           </div>
 
-          <div className="gems" style={{ "--n": sagaProg.length }}>
+          <div className="gems">
             {sagaProg.map(g => (
               <button
                 className="gemWrap"
@@ -671,8 +696,8 @@ export default function MCUTracker() {
           <div className="barMeta"><span>{overall.done} of {overall.total} watched</span><span>{overall.pct}%</span></div>
 
           {saga
-            ? <div className="sagaDone">🏆 Sacred Timeline complete. You've watched the entire core canon.</div>
-            : upNext && <div className="upNext">Up next: <b>#{KONT_NUM[upNext.id]} {upNext.title}</b></div>}
+            ? <div className="sagaDone">🏆 Kontinuity complete. You've watched everything on the list.</div>
+            : upNext && <div className="upNext">Up next: <b>{KONT_NUM[upNext.id] ? `#${KONT_NUM[upNext.id]} ` : ""}{upNext.title}</b></div>}
         </header>
 
         <div className="navWrap">
