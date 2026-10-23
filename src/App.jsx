@@ -105,6 +105,8 @@ export default function MCUTracker() {
   const [backupMsg, setBackupMsg] = useState("");
   const [pendingJump, setPendingJump] = useState(null);
   const [flashKey, setFlashKey] = useState(null);
+  const [pendingScroll, setPendingScroll] = useState(null);
+  const [flashRow, setFlashRow] = useState(null);
 
   useEffect(() => {
     (async () => {
@@ -267,6 +269,30 @@ export default function MCUTracker() {
     setTimeout(() => setFlashKey(k => (k === key ? null : k)), 1500);
   }, [pendingJump, top, p0Open]);
 
+  // Tapping "Up next": open any hidden section that holds the item, scroll to it, and flash it
+  const goToUpNext = () => {
+    const en = upNextInfo.entry;
+    if (!en) return;
+    if (top === "kontinuity") {
+      const sec = SECTIONS.find(x => x.entries.some(it => it.id === en.id));
+      const grp = Object.values(DEF_GROUPS).find(g => g.ids.includes(en.id));
+      setP0Open(x => ({ ...x, ...(sec ? { [sec.key]: true } : {}), ...(grp ? { [grp.key]: true } : {}) }));
+    }
+    setPendingScroll(en.id);
+  };
+  useEffect(() => {
+    if (!pendingScroll) return;
+    const id = pendingScroll;
+    // Infinity War is shown as two rows ("iw#1", "iw#2")
+    const el = document.querySelector(`[data-entry="${id}"]`) || document.querySelector(`[data-entry="${id}#1"]`);
+    setPendingScroll(null);
+    if (!el) return;
+    el.scrollIntoView({ block: "center" });
+    const rowId = el.getAttribute("data-entry");
+    setFlashRow(rowId);
+    setTimeout(() => setFlashRow(r => (r === rowId ? null : r)), 1500);
+  }, [pendingScroll, p0Open]);
+
   /* ---- row renderer ---- */
   const Row = (entry, label) => {
     const complete = isComplete(entry, state);
@@ -276,7 +302,7 @@ export default function MCUTracker() {
     const partial = isSeries && watched > 0 && !complete;
     const phaseColor = entry.accent || (entry.phase ? PHASES[entry.phase].color : "#5B6588");
     return (
-      <div key={entry.id} className={`row ${complete ? "rowDone" : ""}`} style={entry.accent ? { borderLeft: `3px solid ${entry.accent}` } : undefined}>
+      <div key={entry.id} data-entry={entry.id} className={`row ${complete ? "rowDone" : ""}${flashRow === entry.id ? " rowFlash" : ""}`} style={entry.accent ? { borderLeft: `3px solid ${entry.accent}` } : undefined}>
         <div className="rowMain" onClick={() => isSeries && setExpanded(x => ({ ...x, [entry.id]: !open }))}>
           <div className="rail">
             {label != null && <span className="num">{label}</span>}
@@ -571,6 +597,13 @@ export default function MCUTracker() {
         .upNext b { color: #F0B429; font-weight: 600; }
         .upNext { flex-wrap: wrap; border-radius: 14px; row-gap: 2px; }
         .upNextList { color: #8B93AD; font-size: 12px; }
+        .upNext { font-family: inherit; color: inherit; text-align: left; cursor: pointer; }
+        .upNext:hover:not(:disabled) { border-color: #F0B429; }
+        .upNext:disabled { cursor: default; }
+        .upNext:focus-visible { outline: 2px solid #F0B429; outline-offset: 2px; }
+        .upNextGo { color: #F0B429; font-weight: 700; }
+        .rowFlash { animation: rowFlash 1.5s ease-out; }
+        @keyframes rowFlash { 0% { box-shadow: 0 0 0 3px rgba(240,180,41,.7); border-color: #F0B429; } 100% { box-shadow: 0 0 0 3px transparent; } }
         .sagaDone { margin-top: 14px; padding: 10px 14px; border-radius: 12px; font-size: 14px;
                     background: linear-gradient(90deg, rgba(226,54,54,.18), rgba(240,180,41,.18)); border: 1px solid #F0B429; }
         /* tabs */
@@ -730,7 +763,7 @@ export default function MCUTracker() {
 
           {saga
             ? <div className="sagaDone">🏆 Kontinuity complete. You've watched everything on the list.</div>
-            : <div className="upNext">
+            : <button className="upNext" onClick={goToUpNext} disabled={upNextInfo.mode === "end"} aria-label={upNextInfo.entry ? `Scroll to ${upNextInfo.entry.title}` : "End of list"}>
                 {upNextInfo.mode === "end" ? (
                   <span>You've reached the end of this list</span>
                 ) : (
@@ -741,7 +774,8 @@ export default function MCUTracker() {
                   </span>
                 )}
                 <span className="upNextList">· {upNextInfo.label}</span>
-              </div>}
+                {upNextInfo.mode !== "end" && <span className="upNextGo">↓</span>}
+              </button>}
         </header>
 
         <div className="navWrap">
