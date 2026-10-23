@@ -69,6 +69,20 @@ Object.keys(cover).forEach((parent) => {
   }
 });
 
+// 5. release-order warning: titles from the same month need an exact day in SORT_OVERRIDE
+//    (e.g. "2026-07-01"), otherwise their order in Canon Release Order is a guess.
+const hasExactDay = (r) => {
+  const o = D.SORT_OVERRIDE[r.id];
+  return o ? o.split("-").length === 3 : /\b\d{1,2},/.test(r.date);
+};
+const byMonth = {};
+D.RELEASE_LIST.forEach((r) => { (byMonth[Math.floor(r._key / 100)] ||= []).push(r); });
+Object.entries(byMonth).forEach(([m, list]) => {
+  if (list.length > 1 && list.some((r) => !hasExactDay(r))) {
+    console.warn(`Warning: release order for ${m.slice(0, 4)}-${m.slice(4)} may be off. Add exact days for: ${list.filter((r) => !hasExactDay(r)).map((r) => r.id).join(", ")}`);
+  }
+});
+
 if (errors.length) {
   console.error(`\nData check FAILED (${errors.length} problem${errors.length === 1 ? "" : "s"}):\n`);
   errors.forEach((e) => console.error("  - " + e));
