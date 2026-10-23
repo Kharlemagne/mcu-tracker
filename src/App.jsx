@@ -188,11 +188,31 @@ export default function MCUTracker() {
 
   const overall = useMemo(() => listProgress(CORE, state), [state]);
   const upNext = useMemo(() => ORDERED_CORE.find(it => !isComplete(it, state)), [state]);
-  const phaseProg = useMemo(() => {
-    const out = {};
-    for (const p of [1, 2, 3, 4, 5, 6]) out[p] = listProgress(CORE.filter(it => it.phase === p), state);
-    return out;
-  }, [state]);
+  // One gem per Kontinuity saga, counting everything watchable inside it (films, seasons, one-shots, crossovers)
+  const sagaProg = useMemo(() => KONT.map(sec => {
+    const entries = [];
+    const seen = new Set();
+    const add = (en) => { if (en && !seen.has(en.id)) { seen.add(en.id); entries.push(en); } };
+    sec.items.forEach(t => {
+      if (t.k === "core") add(CORE_BY_ID[t.id]);
+      else if (t.k === "part") add(CORE_BY_ID.iw);
+      else if (t.k === "seg") add(SEGS[t.id]);
+      else if (t.k === "side" || t.k === "stream") add(ENTRY[t.id]);
+      else if (t.k === "short") add(SHORTS[t.id]);
+      else if (t.k === "def") DEF_GROUPS[t.id].ids.forEach(id => add(ENTRY[id]));
+    });
+    return { key: sec.key, title: sec.title, color: sec.color, ...listProgress(entries, state) };
+  }), [state]);
+
+  const jumpToSaga = (key) => {
+    setTop("kontinuity");
+    setTimeout(() => {
+      const el = document.getElementById(`kont-${key}`);
+      if (!el) return;
+      const calm = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+      el.scrollIntoView({ behavior: calm ? "auto" : "smooth", block: "start" });
+    }, 60);
+  };
 
   /* ---- row renderer ---- */
   const Row = (entry, label) => {
@@ -369,7 +389,7 @@ export default function MCUTracker() {
     const coreIds = [...new Set(sec.items.map(t => (t.k === "core" ? t.id : t.k === "part" ? "iw" : null)).filter(Boolean))];
     const prog = listProgress(coreIds.map(id => CORE_BY_ID[id]), state);
     return (
-      <section key={sec.key} className="phase">
+      <section key={sec.key} id={`kont-${sec.key}`} className="phase">
         <div className="phaseHead">
           <h2 style={{ color: sec.color }}>{sec.title}</h2>
           <span className="phaseCount">{prog.done}/{prog.total}</span>
@@ -476,11 +496,16 @@ export default function MCUTracker() {
         }
         h1 em { font-style: normal; color: #E23636; }
         .sub { color: #8B93AD; font-size: 13px; margin-bottom: 18px; }
-        .gems { display: flex; gap: 10px; align-items: flex-end; margin: 14px 0 6px; }
-        .gem { position: relative; width: 26px; height: 26px; border-radius: 7px; transform: rotate(45deg);
+        .gems { display: grid; grid-template-columns: repeat(var(--n, 6), minmax(0, 1fr)); gap: 18px 4px; justify-items: center; margin: 18px 0 6px; }
+        .gemHint { font-size: 11px; color: #5B6588; margin-top: 4px; }
+        .phase { scroll-margin-top: 120px; }
+        .gem { position: relative; width: 22px; height: 22px; border-radius: 7px; transform: rotate(45deg);
                border: 1.5px solid; overflow: hidden; background: #10152A; flex: none; }
         .gem i { position: absolute; left: 0; right: 0; bottom: 0; display: block; }
-        .gemWrap { display: flex; flex-direction: column; align-items: center; gap: 7px; }
+        .gemWrap { display: flex; flex-direction: column; align-items: center; gap: 9px; background: none; border: 0; padding: 4px 0 0; margin: 0; cursor: pointer; font: inherit; color: inherit; }
+        .gemWrap:hover .gem { filter: brightness(1.25); }
+        .gemWrap:focus-visible { outline: 2px solid #F0B429; outline-offset: 3px; border-radius: 8px; }
+        @media (max-width: 560px) { .gems { grid-template-columns: repeat(6, minmax(0, 1fr)); } }
         .gemLabel { font-size: 10px; color: #8B93AD; font-variant-numeric: tabular-nums; }
         .bigBar { height: 10px; background: #131829; border: 1px solid #232B45; border-radius: 99px; overflow: hidden; margin-top: 14px; }
         .bigBar div { height: 100%; background: linear-gradient(90deg, #E23636, #F0B429); border-radius: 99px; transition: width .5s cubic-bezier(.2,.8,.2,1); }
@@ -616,7 +641,7 @@ export default function MCUTracker() {
         <header>
           <div className="kicker">Watch orders · through Oct 2026</div>
           <h1>The Ultimate <em>MCU</em> Tracker</h1>
-          <p className="sub">{CORE.length} canon entries across six phases — check off films, tap a series to track every episode. Progress saves automatically.</p>
+          <p className="sub">{CORE.length} canon entries across {KONT.length} Kontinuity sagas — check off films, tap a series to track every episode. Progress saves automatically.</p>
 
           <div className="betaBar">
             <span className="betaPill">BETA {APP_VERSION}</span>
@@ -624,20 +649,23 @@ export default function MCUTracker() {
             <a className="kofi" href={KOFI_URL} target="_blank" rel="noopener noreferrer">☕ Support on Ko-fi</a>
           </div>
 
-          <div className="gems">
-            {[1, 2, 3, 4, 5, 6].map(p => {
-              const pr = phaseProg[p];
-              const c = PHASES[p].color;
-              return (
-                <div className="gemWrap" key={p} title={`${PHASES[p].name}: ${pr.done}/${pr.total}`}>
-                  <span className="gem" style={{ borderColor: c, boxShadow: pr.pct === 100 ? `0 0 10px ${c}` : "none" }}>
-                    <i style={{ height: `${pr.pct}%`, background: c, opacity: 0.85 }} />
-                  </span>
-                  <span className="gemLabel">{pr.done}/{pr.total}</span>
-                </div>
-              );
-            })}
+          <div className="gems" style={{ "--n": sagaProg.length }}>
+            {sagaProg.map(g => (
+              <button
+                className="gemWrap"
+                key={g.key}
+                title={`${g.title}: ${g.done}/${g.total}`}
+                aria-label={`${g.title}: ${g.done} of ${g.total} watched. Jump to this saga.`}
+                onClick={() => jumpToSaga(g.key)}
+              >
+                <span className="gem" style={{ borderColor: g.color, boxShadow: g.pct === 100 ? `0 0 10px ${g.color}` : "none" }}>
+                  <i style={{ height: `${g.pct}%`, background: g.color, opacity: 0.85 }} />
+                </span>
+                <span className="gemLabel">{g.done}/{g.total}</span>
+              </button>
+            ))}
           </div>
+          <div className="gemHint">Tap a gem to jump to that saga</div>
 
           <div className="bigBar"><div style={{ width: `${overall.pct}%` }} /></div>
           <div className="barMeta"><span>{overall.done} of {overall.total} watched</span><span>{overall.pct}%</span></div>
