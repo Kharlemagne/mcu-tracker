@@ -215,7 +215,38 @@ export default function MCUTracker() {
   };
 
   const overall = useMemo(() => listProgress(ALL_ENTRIES, state), [state]);
-  const upNext = useMemo(() => ALL_ENTRIES.find(it => !isComplete(it, state)), [state]);
+  // "Up next" follows your furthest point in whichever list is open, so skipping ahead is fine.
+  // Furthest point = the last item in the list that is finished or partly watched.
+  const upNextInfo = useMemo(() => {
+    let list, label;
+    if (top === "kontinuity") { list = ALL_ENTRIES; label = "Kontinuity"; }
+    else if (top === "release") {
+      list = RELEASE_LIST.filter(it => relFilter === "all" || it.group === relFilter);
+      label = relFilter === "all" ? "Release order" : `Release order · ${RELEASE_FILTERS.find(f => f.key === relFilter).label}`;
+    } else {
+      const t = SIDE_TABS[subSel[top]];
+      // bare "Season 1" titles get their show name so the chip reads clearly
+      list = t.sections.flatMap(sec => sec.items.map(it => (/^Season \d/.test(it.title) ? { ...it, title: `${sec.title} — ${it.title}` } : it)));
+      label = t.label;
+    }
+    const isPartial = (en) => {
+      if (isComplete(en, state)) return false;
+      if (en.eps > 0) return epCount(en, state) > 0;
+      if (en.parts) return !!(state.done[`${en.id}#1`] || state.done[`${en.id}#2`]);
+      return false;
+    };
+    let last = -1;
+    let lastPartial = false;
+    list.forEach((en, i) => {
+      if (isComplete(en, state)) { last = i; lastPartial = false; }
+      else if (isPartial(en)) { last = i; lastPartial = true; }
+    });
+    if (!list.length) return { mode: "end", label };
+    if (last === -1) return { mode: "start", entry: list[0], label };
+    if (lastPartial) return { mode: "continue", entry: list[last], label, eps: list[last].eps > 0 ? `${epCount(list[last], state)}/${list[last].eps} eps` : "" };
+    if (last + 1 < list.length) return { mode: "next", entry: list[last + 1], label };
+    return { mode: "end", label };
+  }, [state, top, subSel, relFilter]);
   // One gem per section of the Kontinuity tab, counting every item inside it
   const sagaProg = useMemo(() => SECTIONS.map(sec => ({ key: sec.key, title: sec.title, color: sec.color, ...listProgress(sec.entries, state) })), [state]);
   const progByKey = useMemo(() => Object.fromEntries(sagaProg.map(g => [g.key, g])), [sagaProg]);
@@ -538,6 +569,8 @@ export default function MCUTracker() {
         .upNext { display: inline-flex; align-items: center; gap: 8px; margin-top: 14px; padding: 8px 14px;
                   background: #131829; border: 1px solid #232B45; border-radius: 99px; font-size: 13px; }
         .upNext b { color: #F0B429; font-weight: 600; }
+        .upNext { flex-wrap: wrap; border-radius: 14px; row-gap: 2px; }
+        .upNextList { color: #8B93AD; font-size: 12px; }
         .sagaDone { margin-top: 14px; padding: 10px 14px; border-radius: 12px; font-size: 14px;
                     background: linear-gradient(90deg, rgba(226,54,54,.18), rgba(240,180,41,.18)); border: 1px solid #F0B429; }
         /* tabs */
@@ -697,7 +730,18 @@ export default function MCUTracker() {
 
           {saga
             ? <div className="sagaDone">🏆 Kontinuity complete. You've watched everything on the list.</div>
-            : upNext && <div className="upNext">Up next: <b>{KONT_NUM[upNext.id] ? `#${KONT_NUM[upNext.id]} ` : ""}{upNext.title}</b></div>}
+            : <div className="upNext">
+                {upNextInfo.mode === "end" ? (
+                  <span>You've reached the end of this list</span>
+                ) : (
+                  <span>
+                    {{ start: "Start with", continue: "Continue", next: "Up next" }[upNextInfo.mode]}:{" "}
+                    <b>{top === "kontinuity" && KONT_NUM[upNextInfo.entry.id] ? `#${KONT_NUM[upNextInfo.entry.id]} ` : ""}{upNextInfo.entry.title}</b>
+                    {upNextInfo.eps ? ` (${upNextInfo.eps})` : ""}
+                  </span>
+                )}
+                <span className="upNextList">· {upNextInfo.label}</span>
+              </div>}
         </header>
 
         <div className="navWrap">
